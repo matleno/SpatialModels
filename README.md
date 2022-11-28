@@ -21,17 +21,17 @@ Description of code is written in Italian, feel free to contact me for any quest
 
 <p align="center">
 Quantile map: <br/>
-<img src="https://i.imgur.com/DyeTJBi.png" height="50%" width="50%" alt="example 1"/>
+<img src="https://i.imgur.com/DyeTJBi.png" height="50%" width="50%" alt="quantilemap"/>
 <br />
 <br />
 Moran Scatterplot:  <br/>
-<img src="https://i.imgur.com/cpwtcro.png" height="50%" width="50%" alt="example 2"/>
+<img src="https://i.imgur.com/cpwtcro.png" height="50%" width="50%" alt="moranscatter"/>
 <br />
 Aic:  <br/>
-<img src="https://i.imgur.com/UcuGeR9.png" height="60%" width="60%" alt="example 2"/>
+<img src="https://i.imgur.com/UcuGeR9.png" height="60%" width="60%" alt="aic"/>
 <br />
 Durbin Impact:  <br/>
-<img src="https://i.imgur.com/ruVdaOE.png" height="50%" width="50%" alt="example 2"/>
+<img src="https://i.imgur.com/ruVdaOE.png" height="50%" width="50%" alt="durbin_impact"/>
 <br />
 
 <!--
