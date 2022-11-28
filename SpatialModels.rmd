@@ -1,0 +1,1161 @@
+---
+title: "Houston Homicide Rate"
+author: "Ulyana Bobak , Matteo Lenoci"
+date: "27/6/2021"
+output:
+  pdf_document:
+    fig_width: 7
+    fig_height: 5
+  word_document: default
+---
+# Indice
+1. **[Introduzione](#introduzione)**
+
+      1.1 [Caricamento dati](#caricamentodati)
+    
+      1.2 [Analisi esplorativa](#analisidati)
+      
+      1.3 [Weight Matrix](#weight)
+      
+      1.4 [ESDA](#esda)
+      
+      1.5 [LISA](#lisa)
+    
+2. **[OLS](#ols)**
+
+      2.1 [Regressione lineare](#lineare)
+      
+      2.2 [Residui](#residui)
+      
+      2.3 [Test JB e BP](#JBBP)
+      
+      2.4 [Local Moran e LM](#local)
+      
+3. **[Modelli spaziali](#spaziali)**
+
+      3.1   [Pure spatial autoregressive](#pure)
+      
+      3.2   [Spatial Lag](#sar)
+      
+      3.3   [Spatial Error](#sem)
+      
+      3.4   [Spatial Durbin](#sdm)
+      
+      3.5   [Sarar](#sarar)
+      
+      3.6   [Spatial Durbin Error](#sdem)
+      
+      3.7   [Spatial Lag X](#slx)
+      
+      3.8   [General nesting spatial model](#gns)
+
+4. **[Confronti e Impatti](#confronti)**
+      
+      4.1   [AIC e considerazioni](#AIC)
+      
+      4.2   [Impatti](#impatti)
+
+5. **[Conclusioni](#conclusioni)** \
+
+
+
+## INTRODUZIONE <a name="introduzione"></a>\
+\
+\
+\
+
+
+Il dataset che andremo ad analizzare prende alcune variabili socio-economiche e il numero di omicidi delle regioni nell'intorno di Houston, in Texas. Se volessimo fare un paragone (forzato) con i dati Eurostat staremmo parlando di livello Nuts 3, forzato perchè in America sono organizzati in contee e quindi il paragone è meno realistico.
+
+Abbiamo a disposizione le stesse variabili ripetute ma divise in 3 gruppi di anni. 1981-87, 1987-91 e 1991-95.
+
+Per alcune invece è rappresentato un dato relativo al singolo anno.
+
+Le variabili utilizzano nel nome del dataset un abbreviativo seguito dal periodo o dall'anno a cui fanno riferimento (esempio HC9195 o RDAC90),
+
+nel dataset troviamo:
+
+HCxxxx = numero di omicidi
+
+POxxxx = popolazione totale della contea
+
+HRxxxx = tasso di omicidi per 100,000 abitanti. Da precisare per la successiva analisi che è una variabile di omicidi generica, possiamo quindi interpretarla come variabile che ci fa comprendere il fenomeno dei crimini commessi in una determinata contea
+
+POxx = spesa pubblica per polizia, la assumiamo come variabile che indica una generale spesa pubblica in sicurezza
+
+RDACxx = indice di povertà, ovvero un indice del quale non abbiamo una precisa descrizione di come sia stato strutturato, solitamente è un insieme di più variabili o indicatori ad indicare il livello di povertà considerando anche alcune restrizioni che le famiglie si trovano costrette a fare (esempio: non utilizzare riscaldamento, non avere una casa di proprietà o non poter pagare l'affitto, mangiare carne almeno una volta ogni due giorni); come spiegato è un indice che nelle statistiche può esser rappresentato in maniera non perfettamente uguale ma nel nostro caso ci interessa come variabile che indica un livello di povertà medio di quello specifico anno in una determinata contea. 
+
+in totale abbiamo 52 contee nell'analisi
+
+
+\
+\
+
+L'analisi che andiamo a strutturare si propone principalmente di analizzare il concetto di "dipendenza spaziale" e quindi se il tasso di omicidi possa esser spiegato dalle variabili prese in considerazione ma ancora più importante se si verificano degli spillover, dei fenomeni cioè di contagio tra le contee vicine.
+
+Il principio su cui ci baseremo sarà perciò la prima legge della geografia (Tobler 1970):
+\
+\
+
+\textbf{\emph{"tutto è correlato con tutto ma le cose più vicine sono più correlate di quelle lontane"}}
+
+\
+\
+andremo infatti a cercare proprio quelli che possono definirsi dei fenomeni di contagio tra le aree in base alle osservazioni a disposizione.
+
+
+
+
+
+### caricamento dati <a name="caricamentodati"></a>
+
+```{r}
+#librerie dataset
+library(readxl)
+
+library(datasets)
+
+#librerie per indici e modelli
+library(spdep)
+
+library(tseries)
+
+library(lmtest)
+
+library(spatialreg)
+
+
+#librerie per grafici e formattazione
+library(tidyverse)
+
+library(ggplot2)
+
+library(ggpubr)
+
+library(ggstance)
+
+
+data1<-read.csv(file="C:/Users/matte/Desktop/DATISPAZIALI/hou_hom.csv", 
+                   header = TRUE, sep = ",")
+datacoord<-read_xlsx("C:/Users/matte/Desktop/DATISPAZIALI/coord.xlsx", 
+                   col_names = TRUE)
+
+
+data<-merge(data1, datacoord, by="row.names", all.x=TRUE)
+data <- data[-1]
+attach(data)
+
+options(scipen=999) #eliminiamo la notazione scientifica
+
+
+str(data)
+summary(data)
+```
+\
+\
+\
+
+### Analisi esplorativa <a name="analisidati"></a>
+\
+
+
+
+dai dati a disposizione e vista la struttura del dataset e il summary precedente, soffermiamo l'analisi su due scelte di periodi delle nostre variabili, i motivi sono i seguenti:
+
+gli anni col numero di omicidi dal 91 al 95 non verranno considerati, il motivo è più pratico che teorico: abbiamo a disposizione i dati della spesa in pubblica sicurezza (precisamente in polizia appunto) per gli anni 1977, 1982, 1987; 
+
+sicuramente una spesa pubblica di questo genere porta frutti non solo nell'immediato ma anche nell'arco dei successivi anni (anche considerando che abbiamo soltanto 3 diversi anni come riferimento), il periodo 1991-1995 però è molto lontano dall'ultimo dato disponibile della variabile, cioè 1987, al contrario gli anni 1982 e 1987 si adattano  quasi perfettamente a considerare rispettivamente i periodi 1981-87 e 1987-91.
+
+per quanto riguarda l'indice di povertà prenderemo perciò in considerazione rispettivamente l'indice dell'anno 1985 e quello dell'anno 1990 in quanto è un indice che sicuramente rimane mediamente stabile nel tempo e per questo è meno importante che faccia riferimento precisamente all'inizio o alla fine del periodo della variabile dipendente.
+
+da questa scelta logica evitiamo scelte forzate o analsi per step e partiamo subito analizzando dapprima le variabili scelte per poi proseguire con la vera e propria ESDA.
+
+
+
+```{r}
+#OMICIDI 1981-1987 
+
+o1<-data %>%
+  ggplot(aes(x=HR8187,y=-0.5))+
+  geom_boxploth(aes(HR8187), fill="#72D21C")+
+  geom_density(aes(x=HR8187, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="tasso omicidi 1981-1987")+
+  xlab(label = NULL)
+
+#TASSO OMICIDI 1987-1991 
+o2<-data %>%
+  ggplot(aes(x=HR8791,y=-0.5))+
+  geom_boxploth(aes(HR8791), fill="#72D21C")+
+  geom_density(aes(x=HR8791, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="tasso omicidi 1987-1991")+
+  xlab(label = NULL)
+
+ggarrange(o1,o2)
+
+#popolazione totale 1981-1987
+
+p1<-data %>%
+  ggplot(aes(x=PO8187,y=-0.5))+
+  geom_boxploth(aes(PO8187), fill="#72D21C")+
+  geom_density(aes(x=PO8187, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="popolazione 1981-1987")+
+  xlab(label = NULL)
+
+
+#popolazione totale 1987-1991
+
+p2<-data %>%
+  ggplot(aes(x=PO8791,y=-0.5))+
+  geom_boxploth(aes(PO8791), fill="#72D21C")+
+  geom_density(aes(x=PO8791, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="popolazione 1987-1991")+
+  xlab(label = NULL)
+
+ggarrange(p1,p2)
+```
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+```{r}
+#spesa pubblica sicurezza 1982
+
+s1<-data %>%
+  ggplot(aes(x=PE82,y=-0.5))+
+  geom_boxploth(aes(PE82), fill="#72D21C")+
+  geom_density(aes(x=PE82, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="polizia 1982")+
+  xlab(label = NULL)
+
+#spesa pubblica sicurezza 1987
+
+s2<-data %>%
+  ggplot(aes(x=PE87,y=-0.5))+
+  geom_boxploth(aes(PE87), fill="#72D21C")+
+  geom_density(aes(x=PE87, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="polizia 1987")+
+  xlab(label = NULL)
+
+ggarrange(s1,s2)
+
+#indice di povertà 1985
+
+ip1<-data %>%
+  ggplot(aes(x=RDAC85,y=-0.5))+
+  geom_boxploth(aes(RDAC85), fill="#72D21C")+
+  geom_density(aes(x=RDAC85, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="indice di povertà 1985")+
+  xlab(label = NULL)
+
+#indice di povertà 1990
+
+ip2<-data %>%
+  ggplot(aes(x=RDAC90,y=-0.5))+
+  geom_boxploth(aes(RDAC90), fill="#72D21C")+
+  geom_density(aes(x=RDAC90, y=stat(scaled)), inherit.aes=FALSE, 
+               colour="#72D21C")+
+  theme(legend.position = "none")+
+  labs(title="indice di povertà 1990")+
+  xlab(label = NULL)
+
+ggarrange(ip1,ip2)
+
+```
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+Abbiamo realizzato una rappresentazione grafica della distribuzione delle variabili oggetto di scelta in modo da analizzare la simmetria delle loro distribuzioni.
+
+I grafici riferiti al tasso degli omicidi negli anni 1981-1987 e 1987-1991 ci indicano che siamo di fronte a distribuzioni asimmetriche a destra, o positive; entrambe le distribuzioni sono caratterizzate da una variabilità simile.  
+
+Lo stesso discorso vale per i grafici della popolazione, osservazioni che comunque vengono molto condizionate da una singola contea con valore di popolazione molto alto, Harris (Texas).   
+
+Per quanto rigurda la spesa pubblica per la polizia riferita agli anni 1982 e 1987 si evidenzia anche qui una distribuzione obliqua a destra che corrisponde quindi ad un maggiore addensamento delle osservazioni in corrispondenza dei valori più bassi. Nella maggior parte di contee la spesa pubblica per la polizia è stata più bassa rispetto alla media.
+A differenza dell'anno 1982, il box-plot dell'anno 1987 è contraddistinto da una minore variabilità (box plot più piccolo).
+
+Questa differenza di variabilità è presente anche nella rappresentazione dell'indice di povertà dove la variabilità dell'anno 1985 è maggiore rispetto all'anno 1990, tuttavia in questo caso per entrambe troviamo un'assimmetria negativa, in altre parole nella maggioranza di contee il livello di povertà risulta essere più alto rispetto alla media.
+
+
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+
+```{r}
+library(corrplot)
+
+corrdata<- subset( data, select = c(HR8187,HR8791,PO8187,PO8791,PE82,PE87,RDAC90,RDAC85) )
+
+corr<-cor(corrdata)
+
+corrplot(corr, method="pie", type = "lower")
+```
+
+Andando ad analizzare il grafico delle correlazioni, si nota subito una importante correlazione tra le variabili che rappresentano la popolazione (PO8187, PO8791) e le variabili che indicano il tasso di omicidi (HR8187, HR8791); all'aumentare della popolazione corrisponderà un tasso più alto di omicidi.
+
+Come prevedibile sono molto correlate le variabili della spesa pubblica per la polizia (PE82 e PE87) perchè ovviamente fanno riferimento alla stessa variabile misurata su due periodi diversi e lo stesso vale per popolazione e indice di povertà.
+
+Per quanto rigurda le variabili prese in coppia "RDAC90 e PE87" e "RDAC85 e PE82" osserviamo una leggera correlazione negativa, equivale a dire che all'aumentare della spesa pubblica in sicurezza diminuisce la povertà, probabilmente indice di una contea più ricca (e viceversa).
+
+\
+\
+\
+
+### Weight Matrix <a name="weight"></a>
+
+\
+\
+\
+la matrice dei pesi spaziali che andremo ad utilizzare e che è alla base di tutta la nostra analisi in quanto definisce il concetto di vicinato è quella di tipo *nearest neighbour*, cioè scegliamo un determinato k che rappresenta il numero dei vicini. 
+
+preso il baricentro della nostra area irregolare si va a vedere quali delle altre aree limitrofe sono le più vicine proprio in base al k scelto
+\
+
+
+$$W_i,_j=\left \{ \begin{array}{rl}
+1 \;\;\;\;\;\;\;\; se \, j \, è \, una \, delle \, k \, unità \, più \, vicine \, ad \, i\\
+0 \;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\;\,\, altrimenti
+\end{array}
+\right.$$
+\
+\
+
+si tratta in questo caso di una matrice non simmetrica (in quanto un'area A può essere vicina di B ma non è detto il contrario) e binaria
+
+andremo poi ad effettuare una trasformazione per standardizzarla in modo da dare un peso più equo ai risultati. Si tratta semplicemente di dividere ogni elemento della matrice per il suo totale di riga.
+
+la library che utilizziamo è spdep
+
+la prima matrice è proprio la matrice costruita con il comando knearneigh inserendo il numero relativo al k scelto (il 4 è quello che ci ha portato a risultati ottimali)
+
+una matrice di questo tipo però è intrattabile dentro la libreria spatialreg (quella necessaria per tutte le nostre successive analisi e modelli), per questo la convertiamo prima in nb con il comando knn2nb e poi in un formato specifico definito list w. 
+
+da notare che abbiamo all'interno del comando la possibilità di scelta tra W (quella che utilizzeremo maggiormente e che indica proprio la standardizzazione per riga) e B (binaria che perciò mantiene 0 e 1). Il comando ci permette di creare anche ulteriori tipologie di matrici utilizzando ad esempio la C (tutto è standardizzato per il totale della matrice) o ancora U (una matrice C divisa per il numero dei vicini).
+
+Ovviamente la scelta del tipo di matrice (oltre al formato adatto e digeribile dai comandi per stimare i modelli) diventa assolutamente di fondamentale importanza in questa tipologia di analisi in quanto da essa dipenderà cosa consideriamo vicino o meno e il peso che ognuno di essi avrà. 
+\
+\
+\
+\
+\
+
+```{r}
+coord<-as.matrix(datacoord[,1:2])
+
+
+k<-knearneigh(coord,k=4)
+
+k_nb<-knn2nb(k)
+
+nnkw<-nb2listw(k_nb,style="W")
+nnkw
+
+nnkb<-nb2listw(k_nb,style="B")
+
+```
+
+Con l'aiuto del software GEODA possiamo poi visualizzare graficamente questa matrice in termini di connessioni fra chi è considerato vicino sulla stessa mappa delle nostre contee; questo è possibile tramite l'opzione "show graph" applicata alla themeless map.
+\
+\
+\
+\
+\
+\
+![](mappe/connect.png)
+\
+\
+\
+\
+\
+\
+
+### ESDA <a name="esda"></a>
+
+In questa fase vedremo l'ESDA, cioè l'Esploratory Spatial Data Analysis, è praticamente un'analisi esplorativa con riferimento però appunto all'analisi di dati spaziali.
+
+
+**Test globali**
+
+Andremo ad effettuare dapprima dei test globali sulla nostra variabile, globali perchè considerano le regioni tutte insieme.
+
+Ogni test che vedremo andrà a testare queste due ipotesi principali adattate alla tipologia di test:
+ 
+$$
+H0: assenza \:di\: autocorrelazione \:spaziale
+$$
+$$
+H1: presenza \: di \:autocorrelazione \:spaziale
+$$
+\
+se l'autocorrelazione non è presente vuol dire che i dati osservati sull'unità i-esima non dipendono dall'unità j-esima e viceversa, cioè qualunque pattern è equiprobabile.
+
+*indice* $I$ *di Moran*
+
+$$
+I=\frac{n}{\sum_{i}\sum_{j}w_{ij}}\frac{\sum_{i}\sum_{j}w_{ij}(y_i-\bar{y})(y_j-\bar{y})}{\sum_{i}(y_i-\bar{y})^2}
+$$
+quello che andiamo a verificare infatti è la correlazione della variabile y con se stessa, per questo ci indica l'autocorrelazione.
+
+ovviamente va sottolineato che qualora la matrice W abbia valore pari a 0, cioè l'unità i non ha vicini, il valore torna zero.
+
+nel nostro caso stiamo ovviamente parlando di una matrice standardizzata per riga, se facciamo la sommatoria del primo denominatore otteremmo quindi una sommatoria di righe pari ad 1, quindi $n*1$ e quindi la prima parte della formula si riduce ad 1.
+\
+
+
+L'indice di Moran è un indice che ha un campo di variazione tra $\approx\pm1$  e un valore atteso pari a $E(I)=-\frac{1}{n-1}$
+
+Se l'indice è maggiore del suo valore atteso ci indica una potenziale autocorrelazione positiva, viceversa se minore autocorrelazione negativa
+
+Siccome Cliff e Ord hanno dimostrato che gli indici sono asintoticamente distribuiti come una normale possiamo perciò fare un test Z dato dal valore dell'indice meno la sua $E(I)$ sul suo $\sigma_I$.
+
+Utilizzeremo al tal proposito la funzione moran.test inserendo come opzione alternative "greater" per testare la coda di destra, cioè la presenza di autocorrelazione positiva.
+
+Da notare che anche per i prossimi indici che vedremo, seppur diversi per vari aspetti faremo lo stesso un test di significatività tramite un test Z, cioè il valore dell'indice meno la sua $E()$ tutto sul proprio $sigma$. 
+
+la library di riferimento sarà sempre spdep
+
+l'opzione zero.policy si usa per evitare che in caso di valori pari a 0 nella matrice dei pesi spaziali perchè non ci sono vicini, il sistema utilizzi il valore NA. con true viene automaticamente sostituito uno 0 invece di NA.
+
+```{r}
+
+library(spdep)
+#testiamo l'autocorrelazione positiva
+moran.test(data$HR8187, nnkw, zero.policy = TRUE, alternative= "greater")
+moran.test(data$HR8791, nnkw, zero.policy = TRUE, alternative= "greater")
+
+#test two.sided
+moran.test(data$HR8187, nnkw, zero.policy = TRUE, alternative= "two.sided")
+moran.test(data$HR8791, nnkw, zero.policy = TRUE, alternative= "two.sided")
+
+#test autocorrelazione negativa
+moran.test(data$HR8187, nnkw, zero.policy = TRUE, alternative= "less")
+```
+
+Siamo partiti per verificare l'autocorrelazione nelle due variabili prese a riferimento, nessuna delle due risulta significativa all'opzione "greater". 
+
+l'opzione two.sided però abbassa notevolmente il p-value; questo ci ha spinto a testare l'opzione "less", cioè andiamo a testare l'ipotesi direttamente sulla coda sinistra ed otteniamo un p value significativo per la variabile HR8187, rifiutiamo l'ipotesi H0 di incorrelazione e accettiamo l'ipotesi H1.
+
+ricordiamo che siamo di fronte ad un indice globale che non ci da ulteriori informazioni rispetto a quella già espressa e per questo continuiamo la nostra analisi soffermandoci sulla variabile HR8187
+
+abbiamo quindi un indice di moran significativo pari a -0.17374548, leggermente inferiore al suo valore medio. Ci troviamo di fronte ad un'autocorrelazione negativa. 
+
+il valore della statistica test espressa come dal primo dato dell'output è pari invece a -1.7745.
+\
+\
+
+Procediamo con un altro indice, l'*indice c di Gaery*.
+\
+
+
+$$
+c=\frac{n-1}{2\sum_{i}\sum{_j}\,w_{ij}}\frac{\sum_{i}\sum_{j}\,w_{ij}(y_i-y_j)^2}{\sum_{i}(y_i-\bar{y})}
+$$
+
+su questo indice la logica è diversa, al numeratore non abbiamo più un prodotto ma la differenza del valore osservato fra 2 unità contigue.
+
+La sua expectation, cioè quando il processo è incorrelato, è pari a $E(c)=1$, con un valore minore siamo in presenza di autocorrelazione positiva, nel caso di valore maggiore invece siamo in presenza di autocorrelazione negativa. 
+
+Si nota infatti che l'interpretazione dell'indice è esattamente opposta a quella del Moran.
+
+Il test si svolgerà come già detto nella stessa maniera, utilizzando però il comando di R geary.test; 
+
+attenzione, nonostante si interpreti al contrario del moran, l'ipotesi che utilizzeremo è sempre "less", chi ha scritto la funzione nel pacchetto ha invertito l'istruzione della statistica proprio per renderlo comparabile ad un confronto con l'indice di Moran, quindi $Z = \frac{E(c)-c}{\sigma_c}$
+\
+
+
+
+```{r}
+geary.test(data$HR8791, nnkw, zero.policy=TRUE, alternative = "less")
+geary.test(data$HR8187, nnkw, zero.policy=TRUE, alternative = "less")
+```
+abbiamo un altro test significativo sulla variabile HR8187.
+
+il valore dell'indice è maggiore ad 1, come già detto sintomo di presenza di autocorrelazione negativa. 
+
+Dato il p-value rifiutiamo H0 e accettiamo l'ipotesi H1.
+\
+
+
+un ultimo test globale che vediamo è l'*indice di Getis-Ord*
+
+questo test mira a verificare la presenza di hot spots (cioè valori alti del fenomeno raggruppati insieme) o cold spots (valori bassi del fenomeno raggruppati insieme). Identifica cioè fenomeni di concentrazione spaziale, da sottolineare però che resta un indice globale, ci restituisce un valore unico per l'intero spazio preso in considerazione.
+
+
+
+$$
+G=\frac{\sum_{i}\sum_{j}w_{ij}\,y_i\,y_j}{\sum_{i}\sum_{j}\,y_i\,y_j}\;\:,\;\;i\neq j
+$$
+
+valori alti di questo indice ci indicano potenziali hot spots, viceversa cold spots per valori bassi.
+
+il confronto viene sempre fatto con la sua expectation che però sarà $E(G)=\frac{S}{n(n-1)} \; \;\;\;\;\;\;\; S=\sum_{i}\sum_{j}w_i,_j$
+
+il comando su R è il globalG.test, l'unica accortezza differente è che per questo indice utilizzeremo la matrice binaria.
+
+l'alternativa "less" sarà mirata a verificare la presenza di cold spots
+
+```{r}
+
+globalG.test(data$HR8187, nnkb, zero.policy=TRUE, alternative = "less")
+
+```
+In questo test possiamo accettare l'ipotesi H0, siamo cioè in assenza di valori addensati ad indicare una concentrazione spaziale o più precisamente nel caso del nostro test, assenza di cold spots.
+
+\
+
+l'ultima analisi globale che facciamo è il *Moran Scatterplot*.
+
+In esso troviamo sulle ascisse la nostra variabile y e sulle ordinate il suo ritardo spaziale, cioè Wy
+
+l'indice di Moran in questo grafico viene rappresentato dalla retta, è il coefficiente angolare
+
+
+```{r}
+moran.plot(data$HR8187,nnkw,labels=NULL, xlab=NULL, ylab=NULL)
+```
+
+il grafico conferma i risultati già visti con i test, la retta ha coefficiente angolare negativo, anche abbastanza marcato.
+
+Il plot va interpretato analizzando i 4 diversi quadranti, se abbiamo una concentrazione di punti nel quadrante nord-est e sud-ovest questo ci indica un'autocorrelazione positiva, cioè a valori alti della nostra variabile y corrispondono valori alti delle ritardate, e a valori bassi altri valori bassi. 
+
+Viceversa, nei due restanti quadranti avremo l'opposto, a valori alti della nostra y corrispondono valori bassi della variabile ritardata e viceversa per valori bassi.
+
+Nel nostro caso abbiamo appunto un'autocorrelazione negativa, troviamo infatti i punti nel quadrante sud-est e nord-ovest più presenti e sparsi rispetto agli altri due quadranti, dove invece osserviamo una tendenza al tendere verso il centro dei quadranti. 
+
+da notare inoltre che questo grafico può essere anche utile per evidenziare outliers anche se diversamente da come li abbiamo intesi fin'ora nei nostri studi; se ad esempio abbiamo una forte autocorrelazione positiva (o negativa), un dato singolo nel quadrante affianco potrebbe indicarci un dato spaziale che va al contrario rispetto a tutti gli altri, scatterplot che risulta utile perciò anche a queste analisi.
+\
+\
+
+
+**Mappa Quantilica**
+\
+
+Avevamo già effettuato questo passaggio esplorativo ad inzio ESDA ma dato che a questo punto dell'analisi abbiamo scelto di soffermarci sulla variabile HR8187 possiamo rappresentare graficamente le nostre unità raggruppate in quantili attraverso la mappa quantilica, abbiamo scelto i quartili, contraddistinti sulla mappa da colori diversi.
+
+Si nota subito che le contee con un tasso di omicidi superiore, indicato dal colore rosso, si trovano principalmente nel centro e a est ma in base alla nostra matrice dei pesi non sono tutte vicine, mentre a ovest ci sono tassi più bassi, contraddistinti dal colore giallo chiaro.
+
+In generale quello che si nota è un certo grado di eterogeneità.
+
+
+![](mappe/quant_map4_hr8187.png)
+
+
+**Mappa della Deviazione Standard**
+\
+
+Oltre alla mappa dei quantili possiamo anche visualizzare quella della deviazione standard, ogni categoria è individuata in termini di distanza dal valore medio in funzione di $\sigma$.
+
+I dati con un valore esterno $\mu\,\pm\,3\,\sigma$ sono considerati dei potenziali outliers, ossia dei dati anomali in quanto molto distanti dal valore medio. Nella nostra mappa ne troviamo due contrassegnati dal colore rosso scuro, hanno una deviazione standard maggiore di 17,242. 
+
+![](mappe/deviation_map_hr8187.png)
+
+
+### LISA <a name="lisa"></a>
+
+\
+
+Oltre all'autocorrelazione globale possiamo trovarci di fronte a dei cluster locali, cioè un'autocorrelazione concentrata a livello locale.
+
+Gli indici Lisa (local indicators of spatial association) derivano sempre dall'ormai noto Anselin e mirano a confrontare singolarmente ogni regione rispetto al suo vicinato.
+
+vediamo in primis il local moran, letteralmente una disgregazione dell'indice globale:
+va a prendere solo l'unità i-esima e le sommatorie sono in j
+
+$$
+I(i)= \frac{y_i-\bar{y}\sum_{j}w_{ij}(y_j-\bar{y})}{\frac{\sum_{j}(y_j-\bar{y})^2}{n}}
+$$
+\
+qui le ipotesi H0 e H1 saranno praticamente uguali all'indice già visto con la differenza che non parliamo di autocorrelazione globale ma essendo riferita all'unità i-esima parleremo di assenza o presenza di cluster spaziale.
+
+E ancora, essendo una disgregazione del moran, valori significativamente più elevati dell'ipotesi di normalità indicano un possibile cluster spaziale con valori simili (autocorrelazione positiva) e valori significativamente più bassi un cluster spaziale con valori dissimili (autocorrelazione negativa) e perciò rifiuto di H0.
+
+
+```{r}
+#local moran
+localmoran(HR8187, nnkw, zero.policy = TRUE, alternative="less")
+
+``` 
+Dai risultati vediamo la presenza di 2 dati significativi (posizione 29 e 34), ci stanno indicando la presenza appunto di un cluster spaziale con valori dissimili tra le unità.
+\
+\
+
+
+**Local Getis-Ord**
+\
+
+l'altro indice locale che vediamo è il local G cioè il local Getis-Ord, come nel fratello maggiore globale quest'indice ci aiuta a capire la presenza di hot spots e cold spots però localmente.
+
+ne esistono due versioni, uno che considera nel calcolo l'unità spaziale i-esima e un'altra che la esclude dal calcolo. 
+
+la nostra matrice in formato listw non ha l'attributo "include.self", se volessimo creare l'indice che considera anche l'unità i-esima potremmo scrivere la funzione localG esattamente come  espresso nel codice R nella sezione commentata e nell'output del comando vedremmo l'attributo "gstari" diventare TRUE
+
+$$
+G_i=\frac{\sum_{j \neq i } w_{ij}(d)y_j}{\sum_{j \neq i} y_j}
+$$
+
+dove la d rappresenta una distanza dell'elemento generico della matrice w.
+
+per stimare questo indice utilizzeremo la matrice binaria creata precedentemente.
+
+```{r}
+#local getis-ord 
+
+localG(HR8187, nnkb, zero.policy = TRUE)
+
+
+#localG(HR8187, nb2listw(include.self(k_nb), style="B"), zero.policy = TRUE) 
+
+
+```
+questa funzione non ci fornisce dei p value ma bensì dei valori della statistica Z, considerando un $\alpha$ pari a 0,5% notiamo che abbiamo due valori significativi perchè maggiori di 1.96, sono entrambi positivi e quindi ci portano alla conclusione della presenza di 2 cluster spaziali hot spots.
+
+
+
+## OLS <a name="ols"></a>
+
+### regressione lineare <a name="lineare"></a>
+
+procediamo con la stima del modello classico lineare.
+
+Proprio perchè abbiamo deciso di soffermarci sulla variabile HR8187 come variabile dipendente e da quanto spiegato ad inizio analisi nella nostra stima includeremo anche la rispettiva variabile della popolazione "PO8187", quella della spesa per pubblica sicurezza del 1982 "PE82" e per ultimo l'indice di povertà relativo all'anno 1985 "RDAC85".
+
+```{r}
+
+ols<-lm(HR8187~PO8187+PE82+RDAC85)
+summary(ols)
+AIC(ols)
+
+```
+il risultato ci da significatività sull'intercetta e sullla variabile della popolazione.
+
+l'$R^2$ non è ottimale, il test F di Fischer è significativo.
+
+il risultato dell'AIC per questo primo modello è 271.8094.
+
+### residui <a name="residui"></a>
+
+```{r}
+par(mfrow = c(2,2))
+plot(ols, lwd=3)
+```
+I grafici dei residui mostrano un comportamento che non a caso andrà analizzato meglio attraverso i modelli per dati spaziali perchè i residui li vediamo molto concentrati ma anche molto dispersi fra valori positivi e negativi, questo ci porta a pensare non a caso ai risultati ottenuti dagli indici globali cioè di autocorrelazione negativa. 
+
+Il grafico Q-Q plot poi mostra un andamento abbastanza normale che andremo comunque a verificare meglio con un test Jarque-Bera e nel grafico della Leverage notiamo che abbiamo un'osservazione, che peraltro risultava espressione di un cluster locale negli indici locali, che rappresenta un punto ad alta leva, ha per questo molta forza nei risultati delle analisi. 
+\
+\
+\
+\
+\
+
+### Test JB e BP <a name="JBBP"></a>
+
+Andiamo adesso ad effettuare i noti test sui residui
+
+
+```{R}
+
+jarque.bera.test(residuals(ols))
+
+bptest(ols,studentize = FALSE)
+
+```
+la normalità è confermata in quanto il p value non è significativo, possiamo perciò rifiutare l'ipotesi H1 e accettare l'ipotesi H0 di normalità. 
+
+al contrario però siamo in presenza di eteroschedasticità, dato il risultato del test di Jarque-Bera possiamo evitare di utilizzare anche il test modificato da Koenker, anche detto "studentizzato"
+
+### Local Moran e LM <a name="local"></a>
+
+
+**Indice di Moran**
+
+Una volta stimato il modello di regressione standard quindi possiamo effettuare dei test su di esso sempre volti a verificare la dipendenza spaziale ma questa volta basandoci sui residui.
+
+Il primo che vediamo è l'indice $I_e$ di Moran. 
+
+Come per i precedenti sotto l'ipotesi di assenza di dipendenza spaziale è asintoticamente normale e perciò possiamo utilizzare la statistica test Z già vista precedentemente:
+
+$$
+Z=(I_e-E(I_e))/\sigma_e
+$$
+\
+la particolarità di quest'indice però è che nel caso di risultato del test a favore della dipendenza, cioè rifiuto dell'ipotesi H0, non ci specifica di quale tipo di dipendenza spaziale si tratti, cioè se di tipo "Spatial lag" o "Spatial error"
+
+l'istruzione è simile alla precedente, troviamo lm proprio ad indicare che deriva dal linear model e infatti l'oggetto all'interno di essa sarà proprio l'ols stimato
+
+```{r}
+#moran test sui residui
+lm.morantest(ols,nnkw, alternative="two.sided")
+
+```
+-1.2636 è il risultato della statistica test sull'indice scritta nella spiegazione. 
+
+il valore dell'indice è -0.13591746 
+
+il test risulta non significativo, stiamo per questo accettando l'ipotesi di assenza di dipendenza spaziale, secondo Anselin questo basterebbe a fermarsi al modello OLS.
+
+procediamo però lo stesso col prossimo test.
+\
+
+
+**Lagrange multiplier** 
+
+quando siamo di fronte a dipendenza spaziale, ancor di più se il test precedente restitutisce esito positivo, come già scritto non sappiamo ancora a cosa associare questa dipendenza.
+
+Esistono i cosiddetti Lagrange Multiplier, andiamo cioè a testare due batterie di ipotesi diverse
+
+la prima per valutare l'adeguatezza di un modello di tipo Spatial Lag (Dipendenza spaziale nella variabile dipendente)
+
+$$H0:\rho =0$$ $$ H1:\rho \neq0
+$$
+
+la seconda per valutare l'adeguatezza di un modello di tipo Spatial error (autocorrelazione nell'errore)
+
+$$
+H0:\lambda =0 $$ $$ H1:\lambda \neq0
+$$
+Per farlo utilizziamo il comando lm.LMtest, inserendo al suo interno come test un "concatenate" per testare nella stessa funzione sia il lag che l'errore
+
+gli altri due test che vediamo, quelli preceduti da una R stanno a significare Robust, sono una versione modificata da Bera e Yoon dei Lagrange Multiplier. Robust vuol dire "robusto alla presenza di $\rho$", cioè quando si testa il $\lambda$ lo si fa tenendo in considerazione la presenza del $\rho$ e viceversa per quando si testa il $\rho$.
+
+qualora dai primi due test vediamo che uno dei due è significativo mentre l'altro non lo è non serve usarli, vengono utilizzati proprio per scegliere fra i due in caso di accettazione di entrambe le ipotesi H1 per i primi 2 test. 
+
+```{r}
+#LAGRANGE MULTIPLIER
+lm.LMtests(ols, nnkw, test=c("LMerr","LMlag","RLMerr","RLMlag"))
+
+```
+Nel nostro caso ci accorgiamo che i test Robust non sono necessari, abbiamo un dato significativo per quanto riguarda il test spatial Lag, ci sta dicendo che $\rho \neq 0$
+
+e quindi ci consiglia di procedere con un modello Spatial Lag
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+## Modelli spaziali <a name="spaziali"></a>
+
+
+Per effettuare la regressione per dati spaziali dobbiamo ampliare l'OLS per includere gli effetti spaziali, ci ritroveremo alla fine a dire che l'ols è un caso particolare di questi modelli.
+
+tutto parte dal **General nesting spatial model**
+
+$$
+Y_i=\beta_0+\sum_{k=1}^{p}\beta_k\,x_{ik}  \;\; +\;\; \rho\sum_{j=1}^{n}\,w_{ij}\,y_j \;\;+\;\; \sum_{k=1}^{p}\sum_{j=1}^{n}\,\theta_k\, w_{ij}\,x_{jk} \;\;+\;\epsilon_i \\
+\epsilon_i=\lambda\,\sum_{j=1}^{n}\,w_{ij}\, \epsilon_j\;+\;u_i     \;\;\;\;\;\;\;\;u_i\approx N(0,\sigma_u^2)
+$$
+Scopo dell'analisi è proprio capire anche con l'aiuto degli indici e degli stessi modelli quali sono gli effetti da andare a studiare principalmente, come visto con i Lagrange Multiplier, la scelta più rilevante si ha tra le interazioni spaziali utilizzando gli "spatial lag models" e i parametri di disturbo presenti nell'errore con gli "spatial error models".
+
+quello che otteniamo con il GNS è la dipendenza spaziale espressa da vari aspetti:
+
+-lag(Yi) = $\sum_{j=1}^{n}\,w_{ij}\,y_j$ cioè ritardo spaziale della variabile dipendente, modella la dipendenza spaziale sulla variabile Y. In pratica quello che avviene nell'unità i-esima è influenzato da quello che avviene in tutti i j, detta in altro modo vuol dire che il valore in Yi è influenzato dalla media di quello che capita nei vicini di i (proprio grazie alla sommatoria); la matrice W sappiamo che infatti avrà un valore non pari a 0 solo quando i e j sono vicini, viceversa l'effetto sarà nullo.
+
+-lag($x_{ik}$)= $\sum_{k=1}^{p}\sum_{j=1}^{n}\,\theta\, w_{ij}\,x_{jk}$ come sopra ma qui andiamo a vedere l'influenza su Y della media delle diverse covariate dei siti vicini all'unità i-esima, per tutti i $j$ e anche $k$ (tutte le covariate). In pratica modella gli effetti di interazione sulle variabili esplicative.
+
+-$\sum_{j=1}^{n}\,w_{ij}$ = l'errore sull'unità spaziale dipende dalla media degli errori nei siti vicini ad i, cioè termini di disturbo delle diverse osservazioni; opzione ulteriore quindi dall'assunzione classica che gli errori si distribuiscono secondo una normale con media 0 e varianza $\sigma_{\epsilon}$ .
+
+-$\rho$ e $\lambda$ ci esprimono proprio la forza della dipendenza, non a caso sono fattori moltiplicativi posizionati prima delle sommatorie.
+
+-infine $\beta_k$ e $\theta_k$ sono i parametri di risposta.
+
+Da notare, come già espletato quando abbiamo creato la matrice, l`importanza della scelta del tipo di matrice, da essa derivano tutte le implicazioni della vicinanza. 
+
+general "nesting" tradotto come nido proprio perchè applicando restrizioni su questo otteniamo gli altri modelli che andremo ad analizzare. Se eliminiamo completamente gli effetti spaziali, come già annunciato, otteniamo proprio il classico modello lineare standard.
+\
+\
+
+
+### Pure spatial autoregressive <a name="pure"></a>
+
+
+iniziamo col primo caso, il **Modello autoregressivo spaziale** detto "pure spatial autoregressive model" (Ord). 
+
+è un modello che considera esclusivamente il lag delle Y, non vi troviamo nemmeno le variabili esplicative, modella soltanto la $Y_i$ in funzione del suo vicinato.
+
+considerando la tipologia possiamo quasi assimilarlo ad un test di Moran, ci è poco utile a spiegare effettivamente la nostra analisi ma riusciamo praticamente a vedere la forza del parametro $\rho$
+
+
+```{r}
+#pure spatial autoregressive model
+pure<-spautolm(formula=HC8187~1,listw=nnkw)
+summary(pure)
+
+```
+
+
+considerando che già dai risultati degli indici globali e locali visti ci siamo accorti che dobbiamo indagare meglio la relazione tra le nostre variabili, questo modello ci conferma la sua poca utilità, abbiamo soltanto un valore dell'intercetta (nel nostro caso nemmeno significativo) e un test sul $\rho$ che risulta non significativo (anche se vediamo scritto $\lambda$ stiamo parlando del $\rho$). 
+
+Da notare anche il valore dell'Aic molto elevato rispetto all'OLS
+
+
+### Spatial Lag <a name="SAR"></a>
+
+
+Un altro modello che possiamo ritenere sicuramente più utile è lo **SPATIAL LAG** o "spatial autoregressive model" cioè **SAR**
+
+In questo modello, sempre partendo dal GNS stiamo ponendo pari a 0 sia $\lambda$ che $\theta_k$. 
+
+Possiamo per questo immaginarlo come un OLS che comprende anche il ritardo spaziale delle Y. 
+
+Può essere utile quando ipotizziamo che oltre all'autocorrelazione nell'errore assente supponiamo anche che le x siano esplicative della Y ma non abbiano effetti indiretti e per questo non andiamo a considerare il loro ritardo spaziale.
+
+Le istruzioni necessarie a stimare questo e i modelli successivi saranno proprio una scelta tra *lagsarlm* e *errsarlm* con la differenza internamente dell'opzione DURBIN= false oppure true
+
+il parametro "tol.solve" che troveremo in tutti i modelli può essere necessario perchè quando si invertono le matrici sappiamo che il determinante deve essere diverso da 0, a volte però può essere un valore vicino allo 0 e il comando restituisce errore perchè assume sia 0. Tol.solve è proprio una tolleranza per spostare il numero di 0 prima di considerare il risultato del determinante = 0
+
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+#spatial lag
+Spatialag<-lagsarlm((HC8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=FALSE, tol.solve=1.0e-27)
+summary(Spatialag)
+```
+su questo modello ci accorgiamo che la nostra analisi inizia ad acquisire un significato più preciso. 
+
+
+L'intercetta non è significativa ma le covariate sono tutte e 3 significative nello spiegare la Y, il parametro $\rho$ che ci esprime la forza della relazione spaziale è significativo con un $\alpha$ al 10% e negativo, a conferma di quanto già visto precedentemente; ci sta indicando un'autocorrelazione negativa anche se leggera e commettendo però un'errore di stima più alto proprio per il p value meno significativo. 
+
+l'aic è diminuito notevolmente dal modello autoregressivo spaziale anche se ancora molto alto rispetto all'ols. 
+
+il test LR, test sul $\rho$ che troveremo anche nei prossimi modelli, è simile al test che abbiamo visto del rapporto G tra le verosimiglianze massimizzate (ricordiamo che questi modelli sono tutti stimati con la verosimiglianza ad eccezione dell'ultimo che vedremo), è utile a valutare appunto la significatività del $\rho$.
+
+"Asymptotic standard error" è il $\sigma$ di $\rho$.
+
+poi di nuovo troviamo i Lagrange Multiplier test (LM test) per vedere se c'è ancora autocorrelazione residua e troviamo il valore del p value relativo a questa informazione.
+\
+\
+
+### Spatial Error <a name="SEM"></a>
+
+Nel prossimo modello invertiamo il ragionamento e andiamo a considerare l'autocorrelazione negli errori $\epsilon_i$; se nella regressione lineare abbiamo sempre detto che seguono una distribuzione normale qui come già sottolineato e come si pùo notare dal modello GNS sono spazialmente autocorrelati e guidati dal parametro  $\lambda$.
+
+modellizzare la dipendenza spaziale sull'errore può essere utile in diversi casi: sappiamo che l'errore raccoglie tutte le informazioni che non abbiamo o che sono omesse dal modello e per questo introducendo l'autocorrelazione negli errori andiamo a supporre che queste informazioni omesse o una possibile cattiva specificazione del modello possano influenzare il valore di $Y_i$ e dei suoi vicini, informazioni raccolte proprio come parametro di disturbo.
+
+il modello in questione è lo **SPATIAL ERROR MODEL** o **SEM**
+
+la funzione non a caso cambia da lagsarlm a errorsarlm, il resto rimane al pari del precedente.
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+
+#spatial error
+Spatialerr<-errorsarlm((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=FALSE, tol.solve=1.0e-27)
+summary(Spatialerr)
+
+```
+
+i p value delle nostre covariate cambiano di significato, sono significativi soltanto l'intercetta e il valore relativo alla popolazione, la stessa situazione che vediamo nell'ols stimato
+
+il lambda ha un valore negativo e anche in questo caso abbiamo una significatività con $\alpha$ al 10% 
+
+l'aic nuovamente migliora notevolamente rispetto allo spatial lag e anche rispetto all'ols.
+
+Da notare che se seguiamo la logica di scelta tramite l'utilizzo dei Lagrange Multiplier visti precedentemente questo modello già da adesso non ci sembra la soluzione più appropriata ma continuiamo con le prossime stime.
+\
+\
+
+
+### Spatial Durbin <a name="SDM"></a>
+
+Passiamo allo **SPATIAL DURBIN** o **SDM**, il modello più tipico nelle analisi per dati spaziali.
+
+questo modello mantiene soltanto il $\lambda$ pari a 0. 
+
+Significa che stiamo andando a modellizzare il ritardo spaziale nelle Y come già visto e introduciamo il ritardo spaziale nelle nostre covariate, per questo viene anche detto modello "mixed".
+
+modellizzare il $Lag(x_{ik})$ significa, al pari di quanto visto per lo spatial lag nella Y, che il valore di $Y_i$ è influenzato non solo direttamente dalle covariate ma anche dagli stessi effetti di esse mediati sulle regioni vicine.
+
+Questo modello risulta il più usato proprio perchè modellizzare il ritardo spaziale delle variabili esplicative riesce a raccogliere eventuali fattori non osservabili omessi che possono influenzare la variabile dipendente, risulta improbabile infatti che le variabili esplicative già considerate riescano a catturare questo tipo di effetti latenti (e sappiamo che in generale ci sono molte variabili socio-economiche da poter prendere in considerazione che noi non stiamo utilizzando perché non le abbiamo a disposizione e che spesso risultano anche correlate tra loro).
+
+torniamo ad utilizzare la funzione lagsarlm e come prevedibile inseriamo DURBIN=TRUE
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+#spatial durbin 
+Spatialdurb<-lagsarlm((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=TRUE, tol.solve=1.0e-27)
+summary(Spatialdurb)
+```
+in questo modello il ritardo spaziale delle x non trova significatività nei p value della stima dei valori, tuttavia ci accorgiamo di avere un indice $\rho$ negativo (ricordiamo, espressione della forza del lag spaziale delle y) con un valore più rilevante di quanto visto precedentemente (-0.48398) e questa volta pienamente significativo. 
+
+l'Aic però risulta leggermente più alto del modello stimato precedentemente, anche se in termini di verosimiglianza sono differenze minime.
+
+Il risultato dei Lagrange multipier test for residual autocorrelation in questo caso mostra anche un p value decisamente meno significativo del precedente sullo spatial lag.
+
+
+
+vediamo la prossima stima:
+
+
+### Sarar <a name="sarar"></a>
+
+**SPATIAL AUTOREGRESSIVE MODEL WITH AUTOREGRESSIVE DISTURBANCE OF ORDER (1,1)** o **SARAR**
+
+in questo modello l'unico parametro posto pari a 0 è il $\theta_k$
+
+stiamo perciò modellizzando la dipendenza spaziale sia nelle Y che nei termini di errore.
+
+su questo utilizziamo la funzione specifica sacsarlm
+
+```{r}
+#SARAR
+sarar<- sacsarlm((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=FALSE, tol.solve=1.0e-27)
+summary(sarar)
+```
+
+è un modello che risulta di più difficile interpretazione proprio perchè presenta sia $\lambda$ che $\rho$, nel nostro risultato inoltre nessuno dei due risulta significativo e comunque esprimono autocorrelazioni di segno opposto. 
+
+nuovamente troviamo significatività nella stima dei parametri solo nell'intercetta e nel parametro che rappresenta la popolazione.
+
+
+
+### Spatial Durbin Error <a name="SDEM"></a>
+
+
+un altro modello nel quale possiamo avere fiducia è proprio lo **SPATIAL DURBIN ERROR** o **SDEM** cioè uno spatial durbin che invece del lag spaziale delle y considera gli errori autocorrelati. 
+
+con questo modello andiamo a valutare se il risultato in una data regione $Y_i$ è influenzato oltre che dalle variabli rilevate sulla stessa unità anche dalle covariate osservate nel vicinato e da fattori non osservabili in altre regioni.
+
+non a caso non utilizziamo la funzione lagsarlm ma errorsarlm con l'opzione DURBIN=TRUE
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+
+#spatial durbin error
+Spatialdurberr<-errorsarlm((HR8187~PO8187+PE82+RDAC85), listw=nnkw, Durbin=TRUE, tol.solve=1.0e-27)
+summary(Spatialdurberr)
+
+```
+
+Nonostante i Lagrange Multiplier sconsigliano questa scelta troviamo un $\lambda$ molto negativo e significativo ad indicare un'autocorrelazione nella variabile di errore.
+
+Qui il valore "laggato" della covariata riferita alla popolazione è significativo e negativo, ci sta dicendo che se i vicini aumentano la loro popolazione si riducono gli omicidi nella mia regione. 
+
+Verso la conclusione della tesina affronteremo meglio la questione.
+
+
+
+### Spatial Lag x <a name="SLX"></a>
+
+l'ultimo modello tra le opzioni che vanno a restringere il gns è lo **SPATIAL LAG X** o **SLX** cioè va a considerare solo le x laggate, la dipendenza spaziale in questo modello è solo nelle x.
+
+particolarità come già annunciato è che si può stimare con l'OLS diversamente dagli altri visti fin'ora.
+
+```{r}
+#SLX
+slx<-lmSLX((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=TRUE)
+summary(slx)
+```
+ci accorgiamo che per certi aspetti sulle covariate laggate abbiamo dei risultati simili a quelli visti nello spatial durbin error, vedremo successivamente il confronto degli Aic ma difficilmente opteremo per questo modello come scelta.
+
+
+### General nesting spatial model <a name="gns"></a>
+
+Per completezza stimiamo anche il **GENERAL NESTING SPATIAL MODEL** o **GNS**, partendo dal presupposto che proprio perché considera tutti gli effetti e quindi tutti i parametri sarà difficilmente oggetto della scelta che faremo data la difficoltà di interpretazione.
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+#modello generale gn
+gns<-sacsarlm((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=TRUE,tol.solve=1.0e-27)
+summary(gns)
+
+```
+\
+\
+\
+\
+
+## Confronti e Impatti <a name="confronti"></a>
+
+### AIC e considerazioni <a name="AIC"></a>
+
+
+vediamo adesso gli AIC per aiutarci nella scelta del modello sul quale andremo ad analizzare gli impatti
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+
+compare<-cbind(AIC(ols),AIC(pure),AIC(Spatialag), AIC(Spatialerr), AIC(Spatialdurb), AIC(Spatialdurberr), AIC(sarar), AIC(slx), AIC(gns))
+colnames(compare)<-c("OLS", "Pure", "Spatial Lag", "Spatial Error" ,"Spatial Durbin", "SDEM", "SARAR", "SLX", "GNS")
+compare
+```
+\
+teniamo a mente gli Aic e andiamo a riproporre lo Spatial Durbin e lo Spatial Durbin Error messi a confronto per giungere alle considerazione effettive.
+\
+\
+
+**considerazioni scelta modello**
+
+
+```{r, tidy=TRUE, tidy.opts=list(width.cutoff=60), width.cutoff = I(60)}
+#spatial durbin 
+Spatialdurb<-lagsarlm((HR8187~PO8187+PE82+RDAC85),listw=nnkw, Durbin=TRUE, tol.solve=1.0e-27)
+summary(Spatialdurb)
+
+#spatial durbin error
+Spatialdurberr<-errorsarlm((HR8187~PO8187+PE82+RDAC85), listw=nnkw, Durbin=TRUE, tol.solve=1.0e-27)
+summary(Spatialdurberr)
+
+```
+
+
+entrambi questi due modelli nonostante non abbiano gli AIC più bassi fra tutti i modelli stimati ci sembrano le opzioni migliori da considerare da un punto di vista interpretativo, la scelta in pratica deve ricadere proprio sull'aspetto del basarsi sul modellizzare la dipendenza spaziale nelle Y piuttosto che l'autocorrelazione nelle fonti di disturbo. 
+
+confermiamo che l'autocorrelazione è significativamente negativa e per entrambi troviamo un valore anche mediamente alto -0.48398 per il $\rho$ e -0.48996 per il $\lambda$.
+
+Entrambi ci comunicano che se aumenta la densità di popolazione aumenta il numero di crimini (omicidi nello specifico), lo spatial durbin error però in particolare ci dice che se aumenta la popolazione dei vicini si riducono i crimini dalla regione "i" presa in considerazione. 
+
+Questo fenomeno si chiama "Bootleg effect", il concetto è che se una contea è meno popolosa viene naturale pensare che ci si sposti nella contea dei vicini per fare una rapina dato che la popolazione è maggiore (ricordiamo che non abbiamo una variabile che ci esprime ad esempio il reddito medio delle contee che potrebbe essere ulteriormente utile).
+
+l'aspetto rilevante è che se pensiamo al $\lambda$, essendo rappresentativo della forza dell'autocorrelazione nel termine di errore dobbiamo portare l'interpretazione nell'ambito dei residui; nella nostra analisi ad un residuo alto corrispondono residui bassi dei vicini (e viceversa), si respingono in pratica; 
+
+ciò significa che fattori non inclusi nella regressione sono diversi fra i vicini (e per l'appunto un esempio banale che può venire in mente tra i tanti è proprio il reddito).
+
+Considerando i risultati e considerando che nel caso dello Spatial Durbin error non abbiamo necessità di "stimare" gli impatti, andremo adesso a vedere come completare la chiave di lettura del fenomeno testando proprio gli impatti dello Spatial Durbin.
+\
+\
+\
+\
+
+### Impatti <a name="impatti"></a>
+\
+Per testare gli impatti utilizzeremo il comando impacts.
+
+
+in pratica si tratta di andare a fare delle simulazioni (R=2000) proprio perchè per essi non abbiamo una funzione che faccia un test definitivo ma tramite le simulazioni andiamo ad estrarre dei campioni per simulare alla fine delle normali ed effettuare i nostri soliti test di significatività.
+
+il set.seed che scriviamo all'inizio si utilizza proprio perchè trattandosi di estrazioni di campioni casuali utilizzare un "seme" fisso permette di replicare i risultati ogni volta che andiamo a lanciare il comando, ometterlo porterebbe ad avere ogni volta dei risultati leggermente diversi.
+
+Detto in maniera più pratica questo comando calcola gli standard error dei parametri, simula dei valori delle normali per effettuare la statistica test e ci restituisce dei "simulated p value".
+
+Possiamo sfruttare lo stesso comando ma senza inserire l'indicazione per le simulazioni per valutare anche gli impatti dello spatial durbin error. Ovviamente il principio di base è che nel caso di autocorrelazione degli errori tutto è condensato dentro la variabile errore e per questo la funzione impacts provata su uno spatial error semplice restituisce errore. Nello spatial Durbin error possiamo lo stesso vedere la differenza tra impatti diretti e indiretti delle nostre covariate con uno specifico livello di significatività, in questo caso non avremo l'indicazione "simulated" nel comando proprio perchè non si stanno effettuando simulazioni.
+
+il diretto sarà frutto dello specifico $\beta_r$ preso in considerazione, l'indiretto invece, proprio considerando l'effetto delle covariate laggate su $Y_i$ sarà l'effetto mediato derivante da $W\theta_r$ \
+\
+\
+
+
+```{r}
+
+#impatti Durbin
+set.seed(2)
+imp<-impacts(Spatialdurb, listw = nnkw, R=2000)
+summary(imp, zstats=TRUE, short=T)
+
+#Durbin error
+imp2<-impacts(Spatialdurberr, listw = nnkw)
+summary(imp2, zstats=TRUE, short=T)
+```
+
+sopra leggo "impact measures" cioè proprio il valore degli impatti. 
+
+successivamente per ognuno posso osservare il valore della statistica test, lo std.error e i p value, come già spiegato, ottenuti dalle simulazioni.
+
+è quasi scontato ma è utile ricordare che i risultati che vediamo sono diversi da quelli espressi nella stima del modello proprio perchè c'è un effetto di spillover tra le unità, d'altronde se volessimo interpretare il modello e non gli impatti, vediamo proprio la stessa covariata ripetuta due volte in quanto la troviamo anche con la dicitura "lag" cioè ritardata. Non a caso qui parliamo di risultati "in media" sulla generica $i$.
+
+Il risultato ci mostra una significatività per la variabile che indica la popolazione, sia sugli impatti diretti che indiretti, entrambi sono impatti in valore molto basso ma presenti; 
+
+per l'impatto diretto pari 0.0000007797479, perciò positivo, stiamo praticamente dicendo che in ogni caso un aumento della popolazione porta ad un incremento dei crimini nella mia regione, viceversa però, per l'impatto indiretto e quindi per l'influenza dei vicini (ricordiamo che appunto siamo nel campo dello spatial lag) abbiamo un valore negativo pari a -0.0000004910598. 
+
+Possiamo per questo immaginare un effetto similare a quanto già spiegato precedentemente sullo spatial durbin error di "bootleg effect", l'aumento della popolazione dei vicini porta ad un incremento dei crimini nel vicinato ed una diminuzione nella mia contea.
+
+Infine abbiamo significatività per la variabile dell'indice di povertà sull'impatto totale pari a 1.749647113121, trattandosi di significatività totale e non specificatamente diretta e indiretta possiamo anche logicamente immaginare che dove c'è una forte incidenza della povertà i crimini siano maggiori e  unito all'interpretazione degli stessi due effetti indicati precedentemente siamo portati a pensare che sia un impatto generale appunto a prescindere se provenga dall'unità $i$ presa in considerazione o come spillover proveniente dall'unità $j$
+
+è utile anche ricordare la differenza fra i due modelli che stiamo valutando, nei modelli Spatial Lag come in questo appena analizzato stiamo parlando di un effetto di spillover che si protrae tra le y.
+
+Lo spatial Durbin Error invece ha appunto un'interpretazione diversa, non a caso non vediamo i valori con la dicitura "simulated".
+
+In maniera simile però troviamo una significatività per gli effetti diretti e indiretti della popolazione totale, i primi pari a 0.0000007817382 e i secondi pari a -0.0000005768096.
+
+l'indice di povertà poi è significativo per un impatto totale pari a 1.9338683570456.
+
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+## Conclusioni <a name="conclusioni"></a>
+
+Alcune prove sono state omesse dalla tesina, i modelli finali sono stati testati anche con meno variabili rispetto a tutte quelle considerate sulla base della significatività, nessun risultato è stato soddisfacente, tendevano a peggiorare i risultati dei parametri e l'interpretazione non migliorava. Abbiamo provato anche ad eliminare outliers senza ottenere, anche qui, risultati sostanzialmente diversi o che migliorassero l'analisi.
+
+
+Conclusa perciò l'analisi dobbiamo ovviamente tenere in considerazione che i Lagrange Multiplier ci portano verso la scelta di uno Spatial Lag, tuttavia, dai risultati ottenuti e dagli impatti mediati osservati sappiamo che entrambi i modelli presi in considerazione sono degli Spatial Durbin, hanno in comune cioè la dipendenza spaziale nelle X ma il primo considera effetti di spillover tra le Y, l'altro trova invece l'autocorrelazione nelle fonti di disturbo del modello.
+
+Una considerazione ulteriore va fatta e cioè che non solo l'errore ma anche le stesse X possono raccogliere l'influenza di variabili omesse dal modello proprio perchè magari correlate con esse e portano ad effetti di spillover; questo aspetto ci porta a pensare che i risultati degli impatti che risultano significativi nello SDEM (e per tipologia uguali a quelli dell'SDM) siano leggermente (anche se di poco) più alti in valore proprio per la considerazione appena fatta; viceversa nell'SDM classico ci andiamo a concentrare maggiormente sugli effetti di "deboard" tra le Y.
+
+In conclusione saremmo portati a scegliere lo Spatial Lag anche se in maniera diversa i due modelli sembrano comunicarci degli aspetti simili e cioè che sicuramente sia la popolosità di una contea che quella dei vicini incidono in maniera diversa ma significativa sul tasso dei crimini e l'indice di povertà è un altra determinante positiva;
+
+il punto della questione che però in fondo ci lascia dubbiosi, rispetto ad una scelta tassativa dell'uno o dell'altro, è che i modelli andrebbe assolutamente completati con altre variabili socioeconomiche solitamente note e di rilievo nelle contee per poter descrivere più accuratamente il fenomeno, riducendo quindi le fonti di disturbo e anche un eventuale correlazione tra le covariate stimate e le covariate omesse perchè non a disposizione tra i dati.
+
+
+
+
